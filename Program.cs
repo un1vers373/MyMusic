@@ -205,4 +205,22 @@ app.MapFallbackToFile("index.html");
 
 await DbInitializer.InitializeAsync(app.Services, app.Logger);
 
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+    var trackId = Guid.Parse("1BE0A230-D102-42AC-ADF6-8EC011E52C4F");
+    var expectedUserId = Guid.Parse("D9042289-D95C-49A1-A360-351430969B3A");
+
+    var track = await db.Tracks
+        .AsNoTracking()
+        .FirstOrDefaultAsync(t => t.Id == trackId);
+
+    Console.WriteLine("========== TRACK CHECK ==========");
+    Console.WriteLine($"Track found: {track != null}");
+    Console.WriteLine($"Owner matches: {track?.UserId == expectedUserId}");
+    Console.WriteLine($"Storage key: {track?.StorageKey}");
+    Console.WriteLine("=================================");
+}
+
 app.Run();
