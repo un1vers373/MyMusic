@@ -1,0 +1,60 @@
+# # Local run: docker compose up --build   ->  http://localhost:8080
+# services:
+#   db:
+#     image: postgres:16-alpine
+#     environment:
+#       POSTGRES_DB: mymusic
+#       POSTGRES_USER: mymusic
+#       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mymusic-dev}
+#     volumes:
+#       - pgdata:/var/lib/postgresql/data
+#     healthcheck:
+#       test: ["CMD-SHELL", "pg_isready -U mymusic -d mymusic"]
+#       interval: 5s
+#       timeout: 5s
+#       retries: 10
+
+#   web:
+#     build: .
+#     depends_on:
+#       db:
+#         condition: service_healthy
+#     ports:
+#       - "808:8080"
+#     environment:
+#       ASPNETCORE_ENVIRONMENT: Production
+#       DATABASE_URL: postgresql://mymusic:${POSTGRES_PASSWORD:-mymusic-dev}@db:5432/mymusic
+#       DATABASE_SSL_MODE: Disable
+#       STORAGE_PROVIDER: ${STORAGE_PROVIDER:-Local}
+#       STORAGE_LOCAL_PATH: /app/storage
+#       S3_ENDPOINT: ${S3_ENDPOINT:-}
+#       S3_BUCKET: ${S3_BUCKET:-}
+#       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+#       S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+#       S3_REGION: ${S3_REGION:-auto}
+#       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+#     volumes:
+#       - music:/app/storage
+
+# volumes:
+#   pgdata:
+#   music:
+
+# Local test without Postgres (closer to Render Free):
+# docker compose up --build -> http://localhost:8080
+services:
+  web:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Подставь нужную переменную/строку для SQLite под твой DatabaseUrl.cs
+      DATABASE_URL: ${DATABASE_URL:-Data Source=/app/data/mymusic.db}
+      STORAGE_PROVIDER: Local
+      STORAGE_LOCAL_PATH: /app/storage
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+    volumes:
+      # Монтируем локальные папки с БД и музыкой для теста
+      - ./data:/app/data:ro
+      - ./storage:/app/storage:ro

@@ -1,0 +1,11 @@
+bin/
+obj/
+.vs/
+.vscode/
+*.user
+.env
+*.zip
+.env.example
+.dockerignore
+readme.md
+render.yaml
