@@ -1,3 +1,4 @@
+
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
@@ -13,7 +14,7 @@ using MyMusic.Services;
 var builder = WebApplication.CreateBuilder(args);
 EnvironmentConfig.Apply(builder.Configuration);
 
-// Render (and most PaaS) pass the port to listen on via PORT.
+// Render port
 var port = Environment.GetEnvironmentVariable("PORT");
 if (!string.IsNullOrWhiteSpace(port))
     builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
@@ -21,8 +22,10 @@ if (!string.IsNullOrWhiteSpace(port))
 // ---------- Upload limits ----------
 builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection("Storage"));
 builder.Services.Configure<UploadOptions>(builder.Configuration.GetSection("Upload"));
+
 var uploadOptions = builder.Configuration.GetSection("Upload").Get<UploadOptions>() ?? new UploadOptions();
 var maxBody = (uploadOptions.MaxAudioMb + uploadOptions.MaxCoverMb + 2) * 1024L * 1024L;
+
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = maxBody);
 builder.Services.Configure<FormOptions>(o =>
 {
@@ -43,12 +46,15 @@ if (!usePostgres && builder.Environment.IsProduction() &&
 }
 
 var sqlitePath = Path.GetFullPath(
-    builder.Configuration["Database:SqlitePath"] ?? "data/mymusic.db", builder.Environment.ContentRootPath);
+    builder.Configuration["Database:SqlitePath"] ?? "data/mymusic.db",
+    builder.Environment.ContentRootPath);
 
 builder.Services.AddDbContext<AppDbContext>(o =>
 {
     if (usePostgres)
-        o.UseNpgsql(DatabaseUrl.ToConnectionString(databaseUrl!, builder.Configuration["DATABASE_SSL_MODE"] ?? "Prefer"));
+        o.UseNpgsql(DatabaseUrl.ToConnectionString(
+            databaseUrl!,
+            builder.Configuration["DATABASE_SSL_MODE"] ?? "Prefer"));
     else
     {
         Directory.CreateDirectory(Path.GetDirectoryName(sqlitePath)!);
@@ -56,9 +62,42 @@ builder.Services.AddDbContext<AppDbContext>(o =>
     }
 });
 
+// ---------- Storage diagnostics ----------
+var storageProvider = builder.Configuration["Storage:Provider"] ?? "Local";
+var storagePath = builder.Configuration["Storage:LocalPath"] ?? "storage";
+
+var audioPath = Path.Combine(
+    builder.Environment.ContentRootPath,
+    "storage",
+    "audio",
+    "d9042289d95c49a1a360351430969b3a",
+    "1be0a230d10242acadf68ec011e52c4f.mp3");
+
+var configuredStoragePath = Path.GetFullPath(
+    storagePath,
+    builder.Environment.ContentRootPath);
+
+Console.WriteLine("========== FILE CHECK ==========");
+Console.WriteLine($"Environment: {builder.Environment.EnvironmentName}");
+Console.WriteLine($"Database provider: {(usePostgres ? "PostgreSQL" : "SQLite")}");
+Console.WriteLine($"SQLite database exists: {File.Exists(sqlitePath)}");
+Console.WriteLine($"SQLite database path: {sqlitePath}");
+Console.WriteLine($"Storage provider: {storageProvider}");
+Console.WriteLine($"Storage path: {configuredStoragePath}");
+Console.WriteLine($"Storage directory exists: {Directory.Exists(configuredStoragePath)}");
+Console.WriteLine($"Audio exists: {File.Exists(audioPath)}");
+
+if (File.Exists(audioPath))
+{
+    Console.WriteLine($"Audio size: {new FileInfo(audioPath).Length} bytes");
+}
+
+Console.WriteLine("================================");
+
 // ---------- Services ----------
 builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
-if ((builder.Configuration["Storage:Provider"] ?? "Local").Equals("S3", StringComparison.OrdinalIgnoreCase))
+
+if (storageProvider.Equals("S3", StringComparison.OrdinalIgnoreCase))
     builder.Services.AddSingleton<IFileStorage, S3FileStorage>();
 else
     builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
@@ -77,11 +116,12 @@ builder.Services.AddControllers()
                 .SelectMany(v => v.Errors)
                 .Select(e => e.ErrorMessage)
                 .FirstOrDefault(m => !string.IsNullOrWhiteSpace(m)) ?? "Invalid request.";
+
             return new BadRequestObjectResult(new { error = message });
         };
     });
 
-// ---------- Auth (HttpOnly cookie; works with <audio> and <img> tags) ----------
+// ---------- Authentication ----------
 builder.Services.AddDataProtection()
     .SetApplicationName("MyMusic")
     .PersistKeysToDbContext<AppDbContext>();
@@ -92,17 +132,30 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         o.Cookie.Name = "mymusic.auth";
         o.Cookie.HttpOnly = true;
         o.Cookie.SameSite = SameSiteMode.Lax;
-        o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest; // https behind the Render proxy
+        o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
         o.ExpireTimeSpan = TimeSpan.FromDays(30);
         o.SlidingExpiration = true;
-        o.Events.OnRedirectToLogin = ctx => { ctx.Response.StatusCode = 401; return Task.CompletedTask; };
-        o.Events.OnRedirectToAccessDenied = ctx => { ctx.Response.StatusCode = 403; return Task.CompletedTask; };
+
+        o.Events.OnRedirectToLogin = ctx =>
+        {
+            ctx.Response.StatusCode = 401;
+            return Task.CompletedTask;
+        };
+
+        o.Events.OnRedirectToAccessDenied = ctx =>
+        {
+            ctx.Response.StatusCode = 403;
+            return Task.CompletedTask;
+        };
     });
+
 builder.Services.AddAuthorization();
 
+// ---------- Rate limiter ----------
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = 429;
+
     o.AddPolicy("auth", http => RateLimitPartition.GetFixedWindowLimiter(
         http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
@@ -111,9 +164,11 @@ builder.Services.AddRateLimiter(o =>
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0,
         }));
+
     o.OnRejected = async (ctx, ct) =>
     {
         ctx.HttpContext.Response.StatusCode = 429;
+
         await ctx.HttpContext.Response.WriteAsJsonAsync(
             new { error = "Too many attempts. Try again in a minute." }, ct);
     };
@@ -121,14 +176,16 @@ builder.Services.AddRateLimiter(o =>
 
 var app = builder.Build();
 
-// X-Forwarded-* handling is enabled by ASPNETCORE_FORWARDEDHEADERS_ENABLED=true (set in the Dockerfile).
+// ---------- Middleware ----------
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
 app.UseDefaultFiles();
+
 app.UseStaticFiles(new StaticFileOptions
 {
-    OnPrepareResponse = ctx => ctx.Context.Response.Headers["Cache-Control"] = "no-cache"
+    OnPrepareResponse = ctx =>
+        ctx.Context.Response.Headers["Cache-Control"] = "no-cache"
 });
 
 app.UseRateLimiter();
@@ -141,7 +198,9 @@ app.MapGet("/health", async (AppDbContext db) =>
         : Results.StatusCode(503));
 
 app.MapControllers();
-app.MapFallback("/api/{**path}", () => Results.Json(new { error = "Not found." }, statusCode: 404));
+app.MapFallback("/api/{**path}", () =>
+    Results.Json(new { error = "Not found." }, statusCode: 404));
+
 app.MapFallbackToFile("index.html");
 
 await DbInitializer.InitializeAsync(app.Services, app.Logger);
