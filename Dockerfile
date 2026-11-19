@@ -38,8 +38,8 @@ ENV ASPNETCORE_HTTP_PORTS=8080 \
     DOTNET_RUNNING_IN_CONTAINER=true
 
 RUN mkdir -p /app/storage /app/data
-
-# COPY --chown=$APP_UID:$APP_UID storage/ /app/storage/
+RUN mkdir -p /app/storage /app/data && chown -R $APP_UID:$APP_UID /app/storage /app/data
+COPY --chown=$APP_UID:$APP_UID storage/ /app/storage/
 COPY --chown=$APP_UID:$APP_UID Data/mymusic.db /app/data/mymusic.db
 
 COPY --from=build --chown=$APP_UID:$APP_UID /app/publish .
